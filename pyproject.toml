@@ -17,3 +17,7 @@ turboquant = "vllm_turboquant:install"
 
 [tool.setuptools.packages.find]
 include = ["vllm_turboquant*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["vllm_turboquant", ".git", "__pycache__", "*.egg-info"]
