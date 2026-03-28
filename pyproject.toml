@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-turboquant"
+version = "0.1.0"
+description = "TurboQuant KV cache compression plugin for vLLM"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "scipy>=1.10",
+]
+
+[project.entry-points."vllm.general_plugins"]
+turboquant = "vllm_turboquant:install"
+
+[tool.setuptools.packages.find]
+include = ["vllm_turboquant*"]
