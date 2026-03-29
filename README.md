@@ -31,8 +31,8 @@ pip install turboquant[vllm]
 Development (includes pytest and ruff):
 
 ```bash
-git clone https://github.com/tonbistudio/turboquant-pytorch.git
-cd turboquant-pytorch
+git clone https://github.com/BFinn/turboquant-vllm.git
+cd turboquant-vllm
 pip install -e ".[dev]"
 ```
 
