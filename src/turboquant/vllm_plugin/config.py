@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-
+from dataclasses import dataclass
 
 # Default Qwen3.5 35B A3B full-attention layers (every 4th layer, 0-indexed)
 _DEFAULT_FULL_ATTN_LAYERS = (3, 7, 11, 15, 19, 23, 27, 31, 35, 39)

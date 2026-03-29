@@ -10,22 +10,22 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from vllm_turboquant.codebook import solve_codebook
-from vllm_turboquant.compressor import TQKeyCompressorGPU, TQValueCompressorGPU
-from vllm_turboquant.config import TurboQuantConfig
-from vllm_turboquant.shadow_cache import ShadowKVCache
-from vllm_turboquant.decode_attention import turboquant_decode_attention
-
+from turboquant.lloyd_max import solve_lloyd_max
+from turboquant.vllm_plugin.compressor import TQKeyCompressorGPU, TQValueCompressorGPU
+from turboquant.vllm_plugin.config import TurboQuantConfig
+from turboquant.vllm_plugin.decode_attention import turboquant_decode_attention
+from turboquant.vllm_plugin.shadow_cache import ShadowKVCache
 
 # ---------------------------------------------------------------------------
 # Codebook
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("bits", [1, 2, 3])
 def test_codebook_sorted_and_symmetric(bits):
     d = 256
-    centroids = solve_codebook(d, bits)
-    assert centroids.shape == (2 ** bits,)
+    centroids, _ = solve_lloyd_max(d, bits)
+    assert centroids.shape == (2**bits,)
     assert torch.all(centroids[:-1] <= centroids[1:]), "Centroids not sorted"
     assert abs(centroids.mean().item()) < 0.01 / math.sqrt(d), (
         f"Codebook mean {centroids.mean():.6f} not near zero"
@@ -35,6 +35,7 @@ def test_codebook_sorted_and_symmetric(bits):
 # ---------------------------------------------------------------------------
 # Value Compressor Roundtrip
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("bits", [2, 3, 4])
 def test_value_compress_decompress(bits):
@@ -53,6 +54,7 @@ def test_value_compress_decompress(bits):
 # Key Compressor Roundtrip
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("bits", [2, 3, 4])
 def test_key_compress_cosine(bits):
     d, n = 256, 500
@@ -68,6 +70,7 @@ def test_key_compress_cosine(bits):
 # ---------------------------------------------------------------------------
 # Asymmetric Inner Product Unbiasedness
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("bits", [2, 3, 4])
 def test_asymmetric_ip_unbiased(bits):
@@ -96,6 +99,7 @@ def test_asymmetric_ip_unbiased(bits):
 # GQA Attention Shapes
 # ---------------------------------------------------------------------------
 
+
 def _make_shadow(config, seq_len=32, block_size=16):
     device = torch.device("cpu")
     shadow = ShadowKVCache(config, device=device)
@@ -110,7 +114,11 @@ def _make_shadow(config, seq_len=32, block_size=16):
 
 def test_gqa_output_shape():
     config = TurboQuantConfig(
-        bits=3, full_attn_layers=(0,), head_dim=256, num_kv_heads=2, num_q_heads=16,
+        bits=3,
+        full_attn_layers=(0,),
+        head_dim=256,
+        num_kv_heads=2,
+        num_q_heads=16,
     )
     shadow, n_blocks = _make_shadow(config)
     query = torch.randn(1, config.num_q_heads, config.head_dim)
@@ -118,8 +126,15 @@ def test_gqa_output_shape():
     block_table = torch.arange(n_blocks, dtype=torch.int32).unsqueeze(0)
     seq_lens = torch.tensor([32])
     result = turboquant_decode_attention(
-        query, shadow, 0, block_table, seq_lens, 16,
-        1.0 / math.sqrt(config.head_dim), output, 1,
+        query,
+        shadow,
+        0,
+        block_table,
+        seq_lens,
+        16,
+        1.0 / math.sqrt(config.head_dim),
+        output,
+        1,
     )
     assert result.shape == (1, config.num_q_heads * config.head_dim)
     assert not torch.isnan(result).any()
@@ -130,9 +145,14 @@ def test_gqa_output_shape():
 # Attention Quality vs Exact FP32
 # ---------------------------------------------------------------------------
 
+
 def test_attention_quality_vs_exact():
     config = TurboQuantConfig(
-        bits=3, full_attn_layers=(0,), head_dim=256, num_kv_heads=2, num_q_heads=16,
+        bits=3,
+        full_attn_layers=(0,),
+        head_dim=256,
+        num_kv_heads=2,
+        num_q_heads=16,
     )
     device = torch.device("cpu")
     shadow = ShadowKVCache(config, device=device)
@@ -152,8 +172,15 @@ def test_attention_quality_vs_exact():
     tq_out = torch.zeros(1, config.num_q_heads * config.head_dim)
     block_table = torch.arange(n_blocks, dtype=torch.int32).unsqueeze(0)
     turboquant_decode_attention(
-        query, shadow, 0, block_table, torch.tensor([seq_len]), block_size,
-        scale, tq_out, 1,
+        query,
+        shadow,
+        0,
+        block_table,
+        torch.tensor([seq_len]),
+        block_size,
+        scale,
+        tq_out,
+        1,
     )
 
     # Exact FP32 attention

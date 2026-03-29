@@ -16,10 +16,12 @@ For values, we use MSE-only decompression since the weighted sum in
 softmax(scores) @ V averages out per-vector errors.
 """
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import math
+
+import torch
+
+from .lloyd_max import solve_lloyd_max
+from .rotation import generate_rotation_matrix
 
 
 class TurboQuantCompressorV2:
@@ -35,16 +37,11 @@ class TurboQuantCompressorV2:
         self.device = device
 
         # Rotation matrix
-        gen = torch.Generator(device="cpu")
-        gen.manual_seed(seed)
-        G = torch.randn(head_dim, head_dim, generator=gen)
-        Q, R = torch.linalg.qr(G)
-        diag_sign = torch.sign(torch.diag(R))
-        diag_sign[diag_sign == 0] = 1.0
-        self.Pi = (Q * diag_sign.unsqueeze(0)).to(device)
+        self.Pi = generate_rotation_matrix(head_dim, seed=seed, device=device)
 
         # Lloyd-Max codebook
-        self.centroids = self._solve_codebook(head_dim, self.mse_bits).to(device)
+        centroids, _ = solve_lloyd_max(head_dim, self.mse_bits)
+        self.centroids = centroids.to(device)
 
         # QJL matrix
         gen2 = torch.Generator(device="cpu")
@@ -53,32 +50,6 @@ class TurboQuantCompressorV2:
 
         # Precompute Pi^T for fast dequant
         self.PiT = self.Pi.T.contiguous()
-
-    def _solve_codebook(self, d: int, bits: int) -> torch.Tensor:
-        from scipy import integrate
-        n_levels = 2 ** bits
-        sigma = 1.0 / math.sqrt(d)
-
-        def pdf(x):
-            return (1.0 / math.sqrt(2 * math.pi * sigma ** 2)) * math.exp(-x * x / (2 * sigma ** 2))
-
-        lo, hi = -3.5 * sigma, 3.5 * sigma
-        centroids = [lo + (hi - lo) * (i + 0.5) / n_levels for i in range(n_levels)]
-
-        for _ in range(200):
-            boundaries = [(centroids[i] + centroids[i + 1]) / 2.0 for i in range(n_levels - 1)]
-            edges = [lo * 3] + boundaries + [hi * 3]
-            new_centroids = []
-            for i in range(n_levels):
-                a, b = edges[i], edges[i + 1]
-                num, _ = integrate.quad(lambda x: x * pdf(x), a, b)
-                den, _ = integrate.quad(pdf, a, b)
-                new_centroids.append(num / den if den > 1e-15 else centroids[i])
-            if max(abs(new_centroids[i] - centroids[i]) for i in range(n_levels)) < 1e-10:
-                break
-            centroids = new_centroids
-
-        return torch.tensor(centroids, dtype=torch.float32)
 
     @torch.no_grad()
     def compress(self, states: torch.Tensor) -> dict:
@@ -134,9 +105,9 @@ class TurboQuantCompressorV2:
         Returns:
             scores: (batch, heads, seq_q, seq_k)
         """
-        k_mse = compressed["k_mse"].float()       # (B, H, S_k, D)
-        signs = compressed["qjl_signs"].float()     # (B, H, S_k, D)
-        r_norm = compressed["residual_norm"].float() # (B, H, S_k)
+        k_mse = compressed["k_mse"].float()  # (B, H, S_k, D)
+        signs = compressed["qjl_signs"].float()  # (B, H, S_k, D)
+        r_norm = compressed["residual_norm"].float()  # (B, H, S_k)
 
         # Term 1: Q @ K_mse^T  (standard matmul)
         term1 = torch.matmul(queries.float(), k_mse.transpose(-2, -1))  # (B, H, S_q, S_k)
@@ -166,36 +137,10 @@ class TurboQuantCompressorMSE:
         self.bits = bits
         self.device = device
 
-        gen = torch.Generator(device="cpu")
-        gen.manual_seed(seed)
-        G = torch.randn(head_dim, head_dim, generator=gen)
-        Q, R = torch.linalg.qr(G)
-        diag_sign = torch.sign(torch.diag(R))
-        diag_sign[diag_sign == 0] = 1.0
-        self.Pi = (Q * diag_sign.unsqueeze(0)).to(device)
-        self.centroids = self._solve_codebook(head_dim, bits).to(device)
+        self.Pi = generate_rotation_matrix(head_dim, seed=seed, device=device)
 
-    def _solve_codebook(self, d, bits):
-        from scipy import integrate
-        n_levels = 2 ** bits
-        sigma = 1.0 / math.sqrt(d)
-        def pdf(x):
-            return (1.0 / math.sqrt(2 * math.pi * sigma ** 2)) * math.exp(-x * x / (2 * sigma ** 2))
-        lo, hi = -3.5 * sigma, 3.5 * sigma
-        centroids = [lo + (hi - lo) * (i + 0.5) / n_levels for i in range(n_levels)]
-        for _ in range(200):
-            boundaries = [(centroids[i] + centroids[i + 1]) / 2.0 for i in range(n_levels - 1)]
-            edges = [lo * 3] + boundaries + [hi * 3]
-            new_c = []
-            for i in range(n_levels):
-                a, b = edges[i], edges[i + 1]
-                num, _ = integrate.quad(lambda x: x * pdf(x), a, b)
-                den, _ = integrate.quad(pdf, a, b)
-                new_c.append(num / den if den > 1e-15 else centroids[i])
-            if max(abs(new_c[i] - centroids[i]) for i in range(n_levels)) < 1e-10:
-                break
-            centroids = new_c
-        return torch.tensor(centroids, dtype=torch.float32)
+        centroids, _ = solve_lloyd_max(head_dim, bits)
+        self.centroids = centroids.to(device)
 
     @torch.no_grad()
     def compress(self, states: torch.Tensor) -> dict:
@@ -219,5 +164,3 @@ class TurboQuantCompressorMSE:
         reconstructed = self.centroids[indices] @ self.Pi
         vec_norms = compressed["vec_norms"].float().unsqueeze(-1)
         return (reconstructed * vec_norms).reshape(B, H, S, D)
-
-

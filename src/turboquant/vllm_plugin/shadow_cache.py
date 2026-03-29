@@ -7,13 +7,13 @@ paged block (block_size tokens).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import logging
+from dataclasses import dataclass
 
 import torch
 
-from .config import TurboQuantConfig
 from .compressor import TQKeyCompressorGPU, TQValueCompressorGPU
+from .config import TurboQuantConfig
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CompressedBlock:
     """Compressed KV data for one paged block, per KV head."""
+
     num_valid: int
     # Per-head lists (length = num_kv_heads)
-    key_mse: list[torch.Tensor]       # [(num_valid, head_dim) fp16]
-    key_qjl_signs: list[torch.Tensor] # [(num_valid, head_dim) int8]
-    key_r_norm: list[torch.Tensor]    # [(num_valid,) fp16]
-    val_indices: list[torch.Tensor]   # [(num_valid, head_dim) uint8]
-    val_norms: list[torch.Tensor]     # [(num_valid,) fp16]
+    key_mse: list[torch.Tensor]  # [(num_valid, head_dim) fp16]
+    key_qjl_signs: list[torch.Tensor]  # [(num_valid, head_dim) int8]
+    key_r_norm: list[torch.Tensor]  # [(num_valid,) fp16]
+    val_indices: list[torch.Tensor]  # [(num_valid, head_dim) uint8]
+    val_norms: list[torch.Tensor]  # [(num_valid,) fp16]
 
 
 class ShadowKVCache:
@@ -36,32 +37,54 @@ class ShadowKVCache:
     Stores one CompressedBlock per (layer_idx, block_idx) for full-attention
     layers only. Provides methods to compress blocks and gather compressed
     data across blocks for decode attention.
+
+    Compressors are created lazily on first use to avoid allocating GPU
+    memory in the API server parent process (which never compresses).
     """
 
     def __init__(self, config: TurboQuantConfig, device: torch.device):
         self.config = config
         self.device = device
 
-        # Per-layer, per-head compressors
+        # Per-layer, per-head compressors (created lazily)
         self.key_compressors: dict[int, list[TQKeyCompressorGPU]] = {}
         self.val_compressors: dict[int, list[TQValueCompressorGPU]] = {}
-
-        for layer_idx in config.full_attn_layers:
-            k_comps = []
-            v_comps = []
-            for h in range(config.num_kv_heads):
-                seed = config.seed_base + layer_idx * 1000 + h
-                k_comps.append(TQKeyCompressorGPU(
-                    config.head_dim, config.bits, seed, device,
-                ))
-                v_comps.append(TQValueCompressorGPU(
-                    config.head_dim, config.bits, seed + 500, device,
-                ))
-            self.key_compressors[layer_idx] = k_comps
-            self.val_compressors[layer_idx] = v_comps
+        self._compressors_initialized = False
 
         # Compressed block storage
         self.blocks: dict[tuple[int, int], CompressedBlock] = {}
+
+    def _ensure_compressors(self) -> None:
+        """Lazily create compressors on first use (in the EngineCore process)."""
+        if self._compressors_initialized:
+            return
+        self._compressors_initialized = True
+
+        for layer_idx in self.config.full_attn_layers:
+            k_comps = []
+            v_comps = []
+            for h in range(self.config.num_kv_heads):
+                seed = self.config.seed_base + layer_idx * 1000 + h
+                k_comps.append(
+                    TQKeyCompressorGPU(
+                        self.config.head_dim,
+                        self.config.bits,
+                        seed,
+                        self.device,
+                    )
+                )
+                v_comps.append(
+                    TQValueCompressorGPU(
+                        self.config.head_dim,
+                        self.config.bits,
+                        seed + 500,
+                        self.device,
+                    )
+                )
+            self.key_compressors[layer_idx] = k_comps
+            self.val_compressors[layer_idx] = v_comps
+
+        logger.info("TurboQuant compressors initialized on %s", self.device)
 
     def compress_and_store(
         self,
@@ -82,6 +105,8 @@ class ShadowKVCache:
         """
         if num_valid == 0:
             return
+
+        self._ensure_compressors()
 
         k_mse_list, k_signs_list, k_rnorm_list = [], [], []
         v_idx_list, v_norms_list = [], []
@@ -121,6 +146,7 @@ class ShadowKVCache:
             qjl_signs:  (total_tokens, head_dim) int8
             r_norm:     (total_tokens,) fp16
         """
+        self._ensure_compressors()
         k_mse_parts, signs_parts, rnorm_parts = [], [], []
         for blk_idx in block_indices:
             cb = self.blocks.get((layer_idx, blk_idx))
@@ -146,15 +172,18 @@ class ShadowKVCache:
 
         Returns: (total_tokens, head_dim) fp16
         """
+        self._ensure_compressors()
         parts = []
         for blk_idx in block_indices:
             cb = self.blocks.get((layer_idx, blk_idx))
             if cb is None:
                 continue
-            v_decompressed = self.val_compressors[layer_idx][kv_head].decompress({
-                "indices": cb.val_indices[kv_head],
-                "norms": cb.val_norms[kv_head],
-            })
+            v_decompressed = self.val_compressors[layer_idx][kv_head].decompress(
+                {
+                    "indices": cb.val_indices[kv_head],
+                    "norms": cb.val_norms[kv_head],
+                }
+            )
             parts.append(v_decompressed)
 
         return torch.cat(parts, dim=0)

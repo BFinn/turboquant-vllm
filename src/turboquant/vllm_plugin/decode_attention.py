@@ -14,8 +14,6 @@ computed once per KV head and reused across the 8 mapped Q heads.
 
 from __future__ import annotations
 
-import math
-
 import torch
 import torch.nn.functional as F
 
@@ -75,26 +73,30 @@ def turboquant_decode_attention(
         for kv_h in range(num_kv_heads):
             # Gather compressed keys and decompressed values for this head
             k_mse, signs, r_norm = shadow_cache.gather_compressed_keys(
-                layer_idx, req_block_indices, kv_h,
+                layer_idx,
+                req_block_indices,
+                kv_h,
             )
             # Trim to actual seq_len (last block may be partially filled)
-            k_mse = k_mse[:seq_len]    # (L, D) fp16
-            signs = signs[:seq_len]     # (L, D) int8
-            r_norm = r_norm[:seq_len]   # (L,) fp16
+            k_mse = k_mse[:seq_len]  # (L, D) fp16
+            signs = signs[:seq_len]  # (L, D) int8
+            r_norm = r_norm[:seq_len]  # (L,) fp16
 
             values = shadow_cache.gather_decompressed_values(
-                layer_idx, req_block_indices, kv_h,
+                layer_idx,
+                req_block_indices,
+                kv_h,
             )
-            values = values[:seq_len]   # (L, D) fp16
+            values = values[:seq_len]  # (L, D) fp16
 
             # Get the S matrix for this KV head's compressor
             S = shadow_cache.key_compressors[layer_idx][kv_h].S
             correction_scale = shadow_cache.key_compressors[layer_idx][kv_h].correction_scale
 
             # Precompute k_mse and signs in float for GEMMs
-            k_mse_f = k_mse.float()       # (L, D)
-            signs_f = signs.float()         # (L, D)
-            r_norm_f = r_norm.float()       # (L,)
+            k_mse_f = k_mse.float()  # (L, D)
+            signs_f = signs.float()  # (L, D)
+            r_norm_f = r_norm.float()  # (L,)
 
             # For each Q head mapped to this KV head
             q_start = kv_h * heads_per_kv

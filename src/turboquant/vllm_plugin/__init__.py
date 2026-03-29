@@ -37,6 +37,7 @@ def install():
     )
 
     from .patch import apply_patch
+
     apply_patch(config)
 
     logger.info("TurboQuant monkey-patch applied to FlashAttentionImpl")

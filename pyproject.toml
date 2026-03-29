@@ -3,21 +3,43 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vllm-turboquant"
+name = "turboquant"
 version = "0.1.0"
-description = "TurboQuant KV cache compression plugin for vLLM"
+description = "Two-stage vector quantization for LLM KV cache compression"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "torch>=2.0",
     "scipy>=1.10",
 ]
 
+[project.optional-dependencies]
+vllm = ["vllm>=0.8"]
+validate = ["transformers>=4.40", "accelerate>=0.25", "bitsandbytes>=0.43"]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[project.urls]
+Repository = "https://github.com/tonbistudio/turboquant-pytorch"
+
 [project.entry-points."vllm.general_plugins"]
-turboquant = "vllm_turboquant:install"
+turboquant = "turboquant.vllm_plugin:install"
 
 [tool.setuptools.packages.find]
-include = ["vllm_turboquant*"]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["vllm_turboquant", ".git", "__pycache__", "*.egg-info"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]

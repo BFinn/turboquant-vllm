@@ -9,14 +9,14 @@ DeltaNet layers and prefill are completely untouched.
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 
 import torch
 
 from .config import TurboQuantConfig
-from .shadow_cache import ShadowKVCache
 from .decode_attention import turboquant_decode_attention
+from .shadow_cache import ShadowKVCache
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +75,9 @@ def _patched_do_kv_cache_update(
         v_block = kv_cache[1, block_idx]  # (block_size, num_kv_heads, head_dim)
 
         # Count valid tokens: slots in this block that appear in slot_mapping
-        block_slots = slot_mapping[(slot_mapping >= block_idx * block_size) &
-                                   (slot_mapping < (block_idx + 1) * block_size)]
+        block_slots = slot_mapping[
+            (slot_mapping >= block_idx * block_size) & (slot_mapping < (block_idx + 1) * block_size)
+        ]
         if block_slots.numel() == 0:
             continue
 
@@ -87,7 +88,11 @@ def _patched_do_kv_cache_update(
         num_valid = max(max_offset, existing.num_valid if existing else 0)
 
         _shadow_cache.compress_and_store(
-            layer_idx, block_idx, k_block, v_block, num_valid,
+            layer_idx,
+            block_idx,
+            k_block,
+            v_block,
+            num_valid,
         )
 
 
@@ -109,23 +114,47 @@ def _patched_forward(
     # Not a TQ layer -> original path
     if layer_idx is None or layer_idx not in _config.full_attn_layers:
         return _original_forward(
-            self, layer, query, key, value, kv_cache,
-            attn_metadata, output, output_scale, output_block_scale,
+            self,
+            layer,
+            query,
+            key,
+            value,
+            kv_cache,
+            attn_metadata,
+            output,
+            output_scale,
+            output_block_scale,
         )
 
     # Warmup / dummy run / CUDA graph capture -> fall back to original
     if attn_metadata is None or torch.cuda.is_current_stream_capturing():
         return _original_forward(
-            self, layer, query, key, value, kv_cache,
-            attn_metadata, output, output_scale, output_block_scale,
+            self,
+            layer,
+            query,
+            key,
+            value,
+            kv_cache,
+            attn_metadata,
+            output,
+            output_scale,
+            output_block_scale,
         )
 
     # Prefill (max_query_len > 1) -> original FlashAttention
     # The FP16 paged cache was already written by do_kv_cache_update
     if attn_metadata.max_query_len > 1:
         return _original_forward(
-            self, layer, query, key, value, kv_cache,
-            attn_metadata, output, output_scale, output_block_scale,
+            self,
+            layer,
+            query,
+            key,
+            value,
+            kv_cache,
+            attn_metadata,
+            output,
+            output_scale,
+            output_block_scale,
         )
 
     # === DECODE PATH: asymmetric attention from shadow cache ===

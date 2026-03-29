@@ -7,13 +7,9 @@ import torch
 import torch.nn.functional as F
 import time
 import os
-import sys
-
-# Allow running as `python validate.py` from within the package directory
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from turboquant.compressors import TurboQuantCompressorV2, TurboQuantCompressorMSE
+from turboquant import TurboQuantCompressorV2, TurboQuantCompressorMSE
 
 MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 NEEDLE = "The secret project code name is AURORA-7749."
