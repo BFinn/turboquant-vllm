@@ -16,16 +16,16 @@ A PyTorch implementation of [TurboQuant](https://arxiv.org/abs/2504.19874) (ICLR
 
 ## Installation
 
-Core library (requires PyTorch and SciPy):
+From source (PyPI package coming soon):
 
 ```bash
-pip install turboquant
+pip install git+https://github.com/BFinn/turboquant-vllm.git
 ```
 
 With vLLM plugin support:
 
 ```bash
-pip install turboquant[vllm]
+pip install "turboquant[vllm] @ git+https://github.com/BFinn/turboquant-vllm.git"
 ```
 
 Development (includes pytest and ruff):
@@ -185,7 +185,7 @@ All configuration is via environment variables:
 |------------------------------|---------|--------------------------------------------|
 | `VLLM_TURBOQUANT_ENABLED`   | `1`     | Set to `0` to disable the plugin           |
 | `VLLM_TURBOQUANT_BITS`      | `3`     | Quantization bit-width (2, 3, or 4)        |
-| `VLLM_TURBOQUANT_HEAD_DIM`  | `256`   | Attention head dimension                   |
+| `VLLM_TURBOQUANT_HEAD_DIM`  | `128`   | Attention head dimension                   |
 | `VLLM_TURBOQUANT_NUM_KV_HEADS` | `2`  | Number of KV heads (for GQA models)        |
 | `VLLM_TURBOQUANT_NUM_Q_HEADS`  | `16` | Number of query heads                      |
 | `VLLM_TURBOQUANT_LAYERS`    | *(auto)* | Comma-separated layer indices to compress |
