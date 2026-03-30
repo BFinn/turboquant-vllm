@@ -48,7 +48,9 @@ pip install torch --index-url https://download.pytorch.org/whl/cu128
 import torch
 from turboquant import TurboQuantProd, solve_lloyd_max
 
-# Solve Lloyd-Max codebook for 3-bit quantization, head_dim=128
+# Solve Lloyd-Max codebook for 3-bit quantization
+# dim = head dimension (128 for most models), bits = quantization bit-width
+# Returns a 1D tensor of 2^bits optimal centroids for the post-rotation coordinate distribution
 codebook = solve_lloyd_max(dim=128, bits=3)
 
 # Create the quantizer (Stage 1 + Stage 2)
@@ -194,7 +196,7 @@ All configuration is via environment variables:
 Example:
 
 ```bash
-VLLM_TURBOQUANT_BITS=3 vllm serve Qwen/Qwen3.5-35B-A3B-AWQ
+VLLM_TURBOQUANT_BITS=3 vllm serve Qwen/Qwen2.5-3B-Instruct
 ```
 
 ## Project Structure
@@ -243,6 +245,8 @@ To run a specific test file:
 ```bash
 pytest tests/test_quantizer.py -v
 ```
+
+**Note:** The `validate` extra (`bitsandbytes`) requires Linux with CUDA. It will fail on CPU-only machines and most Windows setups.
 
 The model validation example requires a CUDA GPU with at least 6 GB VRAM:
 
