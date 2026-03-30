@@ -78,7 +78,7 @@ TurboQuant should work with any model that uses standard multi-head or grouped-q
 
 ### Hardware
 
-- **Required**: NVIDIA GPU with CUDA (tested on RTX 3060 12 GB, RTX 4090)
+- **Required**: NVIDIA GPU with CUDA (tested on RTX 5080 16 GB)
 - **Not supported**: CPU-only, AMD ROCm, Apple MPS
 - **VRAM**: the plugin itself adds negligible overhead; your GPU just needs enough memory to run the model. The whole point is that compressed KV cache lets you fit longer contexts or larger batches in the same VRAM.
 
@@ -161,7 +161,7 @@ Near-zero bias at all bit-widths confirms the QJL correction works. Correlation 
 
 ### Real Model Validation (Qwen2.5-3B-Instruct)
 
-KV cache captured from a real forward pass on an RTX 3060 (12 GB), then compressed with TurboQuant.
+KV cache captured from a real forward pass on an RTX 5080 (16 GB), then compressed with TurboQuant.
 
 **Compression Ratios** (consistent across all context lengths):
 
@@ -172,7 +172,7 @@ KV cache captured from a real forward pass on an RTX 3060 (12 GB), then compress
 | TurboQuant 3-bit | 58 MB                 | 5.0x        |
 | TurboQuant 2-bit | 40 MB                 | 7.3x        |
 
-At 3-bit, 289 MB becomes 58 MB. On a 12 GB GPU, that is the difference between fitting ~8K context and fitting ~40K.
+At 3-bit, 289 MB becomes 58 MB. On a 16 GB GPU, that is the difference between fitting ~8K context and fitting ~40K.
 
 **Attention Score Accuracy** (averaged across all 36 layers, 2 KV heads per layer = 72 total checks):
 
