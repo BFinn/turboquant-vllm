@@ -132,12 +132,11 @@ def main():
     llm = LLM(
         model=model_name,
         enforce_eager=True,
-        gpu_memory_utilization=0.75,
+        gpu_memory_utilization=0.90,
         cpu_offload_gb=cpu_offload_gb,
         max_model_len=max_model_len,
         max_num_seqs=2,
         trust_remote_code=True,
-        language_model_only=True,
     )
 
     load_time = time.time() - t0
