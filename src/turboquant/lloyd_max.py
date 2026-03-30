@@ -15,7 +15,8 @@ This is the single canonical solver used by all TurboQuant quantizers.
 import math
 
 import torch
-from scipy import integrate
+
+from ._codebooks import PRECOMPUTED
 
 
 def beta_pdf(x: float, d: int) -> float:
@@ -53,6 +54,23 @@ def solve_lloyd_max(
         centroids: sorted tensor of 2^bits optimal centroids
         boundaries: sorted tensor of 2^bits - 1 boundaries between centroids
     """
+    # Return precomputed codebooks for d=128 (covers most models) if available
+    if d == 128 and not use_exact and bits in PRECOMPUTED:
+        centroids, boundaries = PRECOMPUTED[bits]
+        return (
+            torch.tensor(centroids, dtype=torch.float32),
+            torch.tensor(boundaries, dtype=torch.float32),
+        )
+
+    # For non-standard dimensions, fall back to numerical solver (requires SciPy)
+    try:
+        from scipy import integrate
+    except ImportError:
+        raise ImportError(
+            "SciPy is required to solve Lloyd-Max codebooks for non-standard dimensions. "
+            "Install it with: pip install scipy>=1.10"
+        ) from None
+
     n_levels = 2**bits
     pdf = (lambda x: beta_pdf(x, d)) if use_exact else (lambda x: gaussian_approx_pdf(x, d))
     sigma = 1.0 / math.sqrt(d)
@@ -103,6 +121,8 @@ def compute_expected_distortion(
     use_exact: bool = False,
 ) -> float:
     """Compute the expected MSE distortion per coordinate for the given quantizer."""
+    from scipy import integrate
+
     pdf = (lambda x: beta_pdf(x, d)) if use_exact else (lambda x: gaussian_approx_pdf(x, d))
     sigma = 1.0 / math.sqrt(d)
     n_levels = len(centroids)

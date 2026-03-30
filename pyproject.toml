@@ -17,13 +17,13 @@ classifiers = [
 dependencies = [
     "torch>=2.0",
     "numpy>=1.24",
-    "scipy>=1.10",
 ]
 
 [project.optional-dependencies]
 vllm = ["vllm>=0.8,<0.9"]
 validate = ["transformers>=4.40", "accelerate>=0.25", "bitsandbytes>=0.43"]
-dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10"]
+solver = ["scipy>=1.10"]
+dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10", "scipy>=1.10"]
 
 [project.urls]
 Repository = "https://github.com/BFinn/turboquant-vllm"
