@@ -11,7 +11,7 @@ A PyTorch implementation of [TurboQuant](https://arxiv.org/abs/2504.19874) (ICLR
 - **3-7x KV cache compression** with minimal impact on attention accuracy (99.5%+ cosine similarity at 3-bit)
 - **Two-stage quantization**: Lloyd-Max optimal scalar quantization with QJL residual correction for unbiased inner products
 - **vLLM plugin**: drop-in KV cache compression via `vllm.general_plugins` entry point -- prefill uses standard FP16 attention, decode uses TurboQuant asymmetric attention
-- **Validated on real models**: tested against Qwen2.5-3B-Instruct KV cache across 2K-8K context lengths
+- **Validated on real models**: tested against Qwen2.5-3B-Instruct and used in production with Qwen3.5-35B-A3B-AWQ
 - **No custom CUDA kernels**: pure PyTorch implementation
 
 ## Installation
@@ -64,6 +64,40 @@ compressed = tq.quantize(keys)
 query = torch.randn(128)
 scores = tq.inner_product(query, compressed)  # shape: (64,)
 ```
+
+## Supported Models & Hardware
+
+### Tested Models
+
+| Model | head_dim | KV Heads | Status |
+|-------|----------|----------|--------|
+| Qwen3.5-35B-A3B-AWQ | 128 | 4 | Production use (vision + text) |
+| Qwen2.5-3B-Instruct | 128 | 2 | Validated (benchmarks above) |
+
+TurboQuant should work with any model that uses standard multi-head or grouped-query attention. The key parameter is `head_dim` — most modern models (Llama 3, Qwen, Mistral, Gemma) use 128. Set `VLLM_TURBOQUANT_HEAD_DIM` to match your model if it differs.
+
+### Hardware
+
+- **Required**: NVIDIA GPU with CUDA (tested on RTX 3060 12 GB, RTX 4090)
+- **Not supported**: CPU-only, AMD ROCm, Apple MPS
+- **VRAM**: the plugin itself adds negligible overhead; your GPU just needs enough memory to run the model. The whole point is that compressed KV cache lets you fit longer contexts or larger batches in the same VRAM.
+
+## How TurboQuant Differs from FP8 / INT4 KV Cache
+
+vLLM supports `--kv-cache-dtype fp8` natively. Here's how TurboQuant compares:
+
+| | FP8 KV Cache | INT4 (KIVI-style) | TurboQuant 3-bit |
+|---|---|---|---|
+| Compression | 2x (16→8 bits) | 4x (16→4 bits) | 5x (16→3 bits + 1-bit QJL) |
+| Approach | Direct cast | Per-channel quantization | Rotation + Lloyd-Max + QJL correction |
+| Inner product bias | None | Small | **Zero** (mathematically unbiased) |
+| Attention fidelity | ~1.000 cosine sim | ~0.995 | 0.995 (3-bit) |
+| Custom kernels needed | No (hardware FP8) | Yes | No (pure PyTorch) |
+| Works with GQA | Yes | Yes | Yes |
+
+**When to use TurboQuant over FP8**: when you need more than 2x compression. FP8 is simpler and lossless for most purposes, but it only halves KV memory. TurboQuant at 3-bit gives 5x compression with near-identical attention scores, which matters for long-context inference where KV cache is the memory bottleneck.
+
+**When to stick with FP8**: short contexts where KV cache isn't the bottleneck, or when you need zero approximation error.
 
 ## Algorithm
 
@@ -193,10 +227,20 @@ All configuration is via environment variables:
 | `VLLM_TURBOQUANT_LAYERS`    | *(auto)* | Comma-separated layer indices to compress |
 | `VLLM_TURBOQUANT_SEED`      | `42`    | Random seed for rotation matrices          |
 
-Example:
+Examples:
 
 ```bash
+# Small model, default settings
 VLLM_TURBOQUANT_BITS=3 vllm serve Qwen/Qwen2.5-3B-Instruct
+
+# Qwen3.5-35B MoE with AWQ weights (production config)
+VLLM_TURBOQUANT_BITS=3 \
+VLLM_TURBOQUANT_HEAD_DIM=128 \
+VLLM_TURBOQUANT_NUM_KV_HEADS=4 \
+VLLM_TURBOQUANT_NUM_Q_HEADS=32 \
+  vllm serve Qwen/Qwen3.5-35B-A3B-AWQ \
+    --max-model-len 32768 \
+    --gpu-memory-utilization 0.95
 ```
 
 ## Project Structure
