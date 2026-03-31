@@ -25,7 +25,7 @@ class CompressedBlock:
     num_valid: int
     # Per-head lists (length = num_kv_heads)
     key_mse: list[torch.Tensor]  # [(num_valid, head_dim) fp16]
-    key_qjl_signs: list[torch.Tensor]  # [(num_valid, head_dim) int8]
+    key_qjl_signs: list[torch.Tensor]  # [(num_valid, head_dim) fp16]
     key_r_norm: list[torch.Tensor]  # [(num_valid,) fp16]
     val_indices: list[torch.Tensor]  # [(num_valid, head_dim) uint8]
     val_norms: list[torch.Tensor]  # [(num_valid,) fp16]
@@ -94,7 +94,9 @@ class ShadowKVCache:
         val_block: torch.Tensor,
         num_valid: int,
     ) -> None:
-        """Compress a KV cache block and store it.
+        """Compress a KV cache block and store it (incrementally).
+
+        Only compresses tokens that haven't been compressed yet.
 
         Args:
             layer_idx: model layer index (must be in full_attn_layers)
@@ -108,21 +110,34 @@ class ShadowKVCache:
 
         self._ensure_compressors()
 
+        existing = self.blocks.get((layer_idx, block_idx))
+        old_valid = existing.num_valid if existing else 0
+
+        if num_valid <= old_valid:
+            return  # nothing new to compress
+
         k_mse_list, k_signs_list, k_rnorm_list = [], [], []
         v_idx_list, v_norms_list = [], []
 
         for h in range(self.config.num_kv_heads):
-            keys_h = key_block[:num_valid, h, :]  # (num_valid, D)
-            vals_h = val_block[:num_valid, h, :]
+            keys_h = key_block[old_valid:num_valid, h, :]
+            vals_h = val_block[old_valid:num_valid, h, :]
 
             k_compressed = self.key_compressors[layer_idx][h].compress(keys_h)
-            k_mse_list.append(k_compressed["k_mse"])
-            k_signs_list.append(k_compressed["qjl_signs"])
-            k_rnorm_list.append(k_compressed["r_norm"])
-
             v_compressed = self.val_compressors[layer_idx][h].compress(vals_h)
-            v_idx_list.append(v_compressed["indices"])
-            v_norms_list.append(v_compressed["norms"])
+
+            if existing:
+                k_mse_list.append(torch.cat([existing.key_mse[h], k_compressed["k_mse"]], dim=0))
+                k_signs_list.append(torch.cat([existing.key_qjl_signs[h], k_compressed["qjl_signs"]], dim=0))
+                k_rnorm_list.append(torch.cat([existing.key_r_norm[h], k_compressed["r_norm"]], dim=0))
+                v_idx_list.append(torch.cat([existing.val_indices[h], v_compressed["indices"]], dim=0))
+                v_norms_list.append(torch.cat([existing.val_norms[h], v_compressed["norms"]], dim=0))
+            else:
+                k_mse_list.append(k_compressed["k_mse"])
+                k_signs_list.append(k_compressed["qjl_signs"])
+                k_rnorm_list.append(k_compressed["r_norm"])
+                v_idx_list.append(v_compressed["indices"])
+                v_norms_list.append(v_compressed["norms"])
 
         self.blocks[(layer_idx, block_idx)] = CompressedBlock(
             num_valid=num_valid,
@@ -170,23 +185,24 @@ class ShadowKVCache:
     ) -> torch.Tensor:
         """Gather and decompress values across blocks for one KV head.
 
+        Batches all blocks into a single decompress call.
+
         Returns: (total_tokens, head_dim) fp16
         """
         self._ensure_compressors()
-        parts = []
+        idx_parts, norm_parts = [], []
         for blk_idx in block_indices:
             cb = self.blocks.get((layer_idx, blk_idx))
             if cb is None:
                 continue
-            v_decompressed = self.val_compressors[layer_idx][kv_head].decompress(
-                {
-                    "indices": cb.val_indices[kv_head],
-                    "norms": cb.val_norms[kv_head],
-                }
-            )
-            parts.append(v_decompressed)
+            idx_parts.append(cb.val_indices[kv_head])
+            norm_parts.append(cb.val_norms[kv_head])
 
-        return torch.cat(parts, dim=0)
+        all_indices = torch.cat(idx_parts, dim=0)
+        all_norms = torch.cat(norm_parts, dim=0)
+        return self.val_compressors[layer_idx][kv_head].decompress(
+            {"indices": all_indices, "norms": all_norms}
+        )
 
     def evict(self, layer_idx: int, block_idx: int) -> None:
         """Remove compressed data for a freed block."""

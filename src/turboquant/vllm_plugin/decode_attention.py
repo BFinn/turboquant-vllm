@@ -53,6 +53,7 @@ def turboquant_decode_attention(
     heads_per_kv = config.heads_per_kv
     head_dim = config.head_dim
     batch_size = seq_lens.shape[0]
+    dtype = query.dtype  # match model dtype (bf16 or fp16)
 
     # vLLM may pass query as (num_tokens, num_q_heads * head_dim) or
     # (num_tokens, num_q_heads, head_dim). Reshape to 3D if needed.
@@ -65,70 +66,57 @@ def turboquant_decode_attention(
         num_blocks = (seq_len + block_size - 1) // block_size
         req_block_indices = block_table[req_idx, :num_blocks].tolist()
 
-        # Query for this request: (num_q_heads, head_dim)
-        q = query[req_idx]  # (num_q_heads, head_dim)
+        # Query for this request: (num_q_heads, head_dim) in model dtype
+        q = query[req_idx]
 
-        all_head_outputs = []
-
+        # Gather all KV heads and batch into (num_kv_heads, L, D)
+        k_mse_all, signs_all, r_norm_all, values_all = [], [], [], []
+        S_all, corr_scales = [], []
         for kv_h in range(num_kv_heads):
-            # Gather compressed keys and decompressed values for this head
             k_mse, signs, r_norm = shadow_cache.gather_compressed_keys(
-                layer_idx,
-                req_block_indices,
-                kv_h,
-            )
-            # Trim to actual seq_len (last block may be partially filled)
-            k_mse = k_mse[:seq_len]  # (L, D) fp16
-            signs = signs[:seq_len]  # (L, D) int8
-            r_norm = r_norm[:seq_len]  # (L,) fp16
+                layer_idx, req_block_indices, kv_h)
+            k_mse_all.append(k_mse[:seq_len].to(dtype))
+            signs_all.append(signs[:seq_len].to(dtype))
+            r_norm_all.append(r_norm[:seq_len].to(dtype))
 
             values = shadow_cache.gather_decompressed_values(
-                layer_idx,
-                req_block_indices,
-                kv_h,
-            )
-            values = values[:seq_len]  # (L, D) fp16
+                layer_idx, req_block_indices, kv_h)
+            values_all.append(values[:seq_len].to(dtype))
 
-            # Get the S matrix for this KV head's compressor
-            S = shadow_cache.key_compressors[layer_idx][kv_h].S
-            correction_scale = shadow_cache.key_compressors[layer_idx][kv_h].correction_scale
+            S_all.append(shadow_cache.key_compressors[layer_idx][kv_h].S.to(dtype))
+            corr_scales.append(shadow_cache.key_compressors[layer_idx][kv_h].correction_scale)
 
-            # Precompute k_mse and signs in float for GEMMs
-            k_mse_f = k_mse.float()  # (L, D)
-            signs_f = signs.float()  # (L, D)
-            r_norm_f = r_norm.float()  # (L,)
+        # Stack: (num_kv_heads, L, D)
+        k_mse_batch = torch.stack(k_mse_all)
+        signs_batch = torch.stack(signs_all)
+        r_norm_batch = torch.stack(r_norm_all)
+        values_batch = torch.stack(values_all)
+        S_batch = torch.stack(S_all)
 
-            # For each Q head mapped to this KV head
-            q_start = kv_h * heads_per_kv
-            q_end = q_start + heads_per_kv
+        # Reshape query for GQA: (num_kv_heads, heads_per_kv, D)
+        q_grouped = q.view(num_kv_heads, heads_per_kv, head_dim)
 
-            # Batch all Q heads for this KV group: (heads_per_kv, D)
-            q_group = q[q_start:q_end].float()
+        # Term 1: batched Q @ K_mse^T -> (H_kv, heads_per_kv, L)
+        term1 = torch.bmm(q_grouped, k_mse_batch.transpose(1, 2))
 
-            # Term 1: Q @ K_mse^T -> (heads_per_kv, L)
-            term1 = q_group @ k_mse_f.T
+        # Term 2: QJL correction via batched matmuls
+        q_proj = torch.bmm(q_grouped, S_batch.transpose(1, 2))
+        qjl_ip = torch.bmm(q_proj, signs_batch.transpose(1, 2))
+        # Scale by per-head correction_scale * residual norms
+        for kv_h in range(num_kv_heads):
+            qjl_ip[kv_h] *= corr_scales[kv_h] * r_norm_batch[kv_h].unsqueeze(0)
 
-            # Term 2: QJL correction
-            # Project queries through S: (heads_per_kv, D) @ (D, D) -> (heads_per_kv, D)
-            q_proj = q_group @ S.T
-            # Dot with signs: (heads_per_kv, D) @ (L, D)^T -> (heads_per_kv, L)
-            qjl_ip = q_proj @ signs_f.T
-            # Scale by residual norms: (heads_per_kv, L) * (L,) broadcast
-            term2 = correction_scale * qjl_ip * r_norm_f.unsqueeze(0)
+        # Combined scores -> softmax (fp32 for stability) -> weighted sum
+        scores = (term1 + qjl_ip) * scale
+        weights = F.softmax(scores.float(), dim=-1).to(dtype)
 
-            # Combined scores -> softmax -> weighted sum
-            scores = (term1 + term2) * scale  # (heads_per_kv, L)
-            weights = F.softmax(scores, dim=-1)  # (heads_per_kv, L)
+        # Weighted sum: (H_kv, heads_per_kv, L) @ (H_kv, L, D) -> (H_kv, heads_per_kv, D)
+        head_out = torch.bmm(weights, values_batch)
 
-            # Weighted sum of values: (heads_per_kv, L) @ (L, D) -> (heads_per_kv, D)
-            head_out = weights @ values.float()
-            all_head_outputs.append(head_out)
+        # Flatten to (num_q_heads, D)
+        req_output = head_out.view(num_q_heads, head_dim)
 
-        # Stack all Q heads: (num_q_heads, head_dim)
-        req_output = torch.cat(all_head_outputs, dim=0)  # (num_q_heads, D)
-
-        # Write to output: may be (num_tokens, num_q_heads * head_dim)
-        # or (num_tokens, num_q_heads, head_dim)
+        # Write to output
         if output.dim() == 3:
             output[req_idx] = req_output.to(output.dtype)
         else:

@@ -84,7 +84,7 @@ class TQKeyCompressorGPU:
         residual = flat - k_mse
         r_norm = torch.norm(residual, dim=-1)  # (N,)
         projected = residual @ self.S.T  # (N, D)
-        signs = (projected >= 0).to(torch.int8) * 2 - 1  # {-1, +1}
+        signs = (projected >= 0).to(torch.float16) * 2 - 1  # {-1, +1} as fp16
 
         return {
             "k_mse": k_mse.half(),
