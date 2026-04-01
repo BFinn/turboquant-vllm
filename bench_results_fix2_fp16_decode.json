@@ -1,0 +1,56 @@
+{
+  "label": "fix2_fp16_decode",
+  "short": {
+    "median_tok_s": 0.0,
+    "mean_tok_s": 0.0,
+    "min_tok_s": 0.0,
+    "max_tok_s": 0.0,
+    "trials": [
+      {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "elapsed": 9.54041051864624,
+        "tok_s": 0.0
+      },
+      {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "elapsed": 0.0013115406036376953,
+        "tok_s": 0.0
+      },
+      {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "elapsed": 0.0008947849273681641,
+        "tok_s": 0.0
+      }
+    ]
+  },
+  "medium": {
+    "median_tok_s": 0.0,
+    "mean_tok_s": 0.0,
+    "min_tok_s": 0.0,
+    "max_tok_s": 0.0,
+    "trials": [
+      {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "elapsed": 0.0008020401000976562,
+        "tok_s": 0.0
+      },
+      {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "elapsed": 0.0007932186126708984,
+        "tok_s": 0.0
+      },
+      {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "elapsed": 0.0007755756378173828,
+        "tok_s": 0.0
+      }
+    ]
+  },
+  "timestamp": "2026-03-31 14:21:52"
+}

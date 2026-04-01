@@ -1,0 +1,56 @@
+{
+  "label": "baseline",
+  "short": {
+    "median_tok_s": 12.663762525467595,
+    "mean_tok_s": 12.647808378003802,
+    "min_tok_s": 12.452653262030122,
+    "max_tok_s": 12.827009346513687,
+    "trials": [
+      {
+        "prompt_tokens": 13,
+        "completion_tokens": 300,
+        "elapsed": 23.68964195251465,
+        "tok_s": 12.663762525467595
+      },
+      {
+        "prompt_tokens": 13,
+        "completion_tokens": 300,
+        "elapsed": 24.091251373291016,
+        "tok_s": 12.452653262030122
+      },
+      {
+        "prompt_tokens": 13,
+        "completion_tokens": 300,
+        "elapsed": 23.388148546218872,
+        "tok_s": 12.827009346513687
+      }
+    ]
+  },
+  "medium": {
+    "median_tok_s": 10.1049968960827,
+    "mean_tok_s": 10.114403949417543,
+    "min_tok_s": 9.972287972620945,
+    "max_tok_s": 10.265926979548984,
+    "trials": [
+      {
+        "prompt_tokens": 615,
+        "completion_tokens": 300,
+        "elapsed": 30.083367109298706,
+        "tok_s": 9.972287972620945
+      },
+      {
+        "prompt_tokens": 615,
+        "completion_tokens": 300,
+        "elapsed": 29.688282251358032,
+        "tok_s": 10.1049968960827
+      },
+      {
+        "prompt_tokens": 615,
+        "completion_tokens": 300,
+        "elapsed": 29.22288465499878,
+        "tok_s": 10.265926979548984
+      }
+    ]
+  },
+  "timestamp": "2026-03-31 13:57:58"
+}

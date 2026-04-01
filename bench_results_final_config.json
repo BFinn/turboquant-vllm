@@ -1,0 +1,56 @@
+{
+  "label": "final_config",
+  "short": {
+    "median_tok_s": 13.691675968613145,
+    "mean_tok_s": 12.321442166347689,
+    "min_tok_s": 9.550678750757017,
+    "max_tok_s": 13.721971779672906,
+    "trials": [
+      {
+        "prompt_tokens": 13,
+        "completion_tokens": 300,
+        "elapsed": 31.41138005256653,
+        "tok_s": 9.550678750757017
+      },
+      {
+        "prompt_tokens": 13,
+        "completion_tokens": 300,
+        "elapsed": 21.862747192382812,
+        "tok_s": 13.721971779672906
+      },
+      {
+        "prompt_tokens": 13,
+        "completion_tokens": 300,
+        "elapsed": 21.911123275756836,
+        "tok_s": 13.691675968613145
+      }
+    ]
+  },
+  "medium": {
+    "median_tok_s": 12.714428779855952,
+    "mean_tok_s": 12.347648053583358,
+    "min_tok_s": 11.532600795273842,
+    "max_tok_s": 12.795914585620277,
+    "trials": [
+      {
+        "prompt_tokens": 615,
+        "completion_tokens": 300,
+        "elapsed": 26.01321291923523,
+        "tok_s": 11.532600795273842
+      },
+      {
+        "prompt_tokens": 615,
+        "completion_tokens": 300,
+        "elapsed": 23.595240116119385,
+        "tok_s": 12.714428779855952
+      },
+      {
+        "prompt_tokens": 615,
+        "completion_tokens": 300,
+        "elapsed": 23.44498300552368,
+        "tok_s": 12.795914585620277
+      }
+    ]
+  },
+  "timestamp": "2026-03-31 15:19:21"
+}

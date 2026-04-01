@@ -1,0 +1,56 @@
+{
+  "label": "gpu_moe8_util85",
+  "short": {
+    "median_tok_s": 13.517313895537063,
+    "mean_tok_s": 12.213773278524123,
+    "min_tok_s": 9.45710387617855,
+    "max_tok_s": 13.666902063856757,
+    "trials": [
+      {
+        "prompt_tokens": 13,
+        "completion_tokens": 300,
+        "elapsed": 31.722185134887695,
+        "tok_s": 9.45710387617855
+      },
+      {
+        "prompt_tokens": 13,
+        "completion_tokens": 300,
+        "elapsed": 22.193758487701416,
+        "tok_s": 13.517313895537063
+      },
+      {
+        "prompt_tokens": 13,
+        "completion_tokens": 300,
+        "elapsed": 21.950841426849365,
+        "tok_s": 13.666902063856757
+      }
+    ]
+  },
+  "medium": {
+    "median_tok_s": 12.766972679096169,
+    "mean_tok_s": 12.344164698784258,
+    "min_tok_s": 11.476794812974182,
+    "max_tok_s": 12.788726604282424,
+    "trials": [
+      {
+        "prompt_tokens": 615,
+        "completion_tokens": 300,
+        "elapsed": 26.139702320098877,
+        "tok_s": 11.476794812974182
+      },
+      {
+        "prompt_tokens": 615,
+        "completion_tokens": 300,
+        "elapsed": 23.458160400390625,
+        "tok_s": 12.788726604282424
+      },
+      {
+        "prompt_tokens": 615,
+        "completion_tokens": 300,
+        "elapsed": 23.498131275177002,
+        "tok_s": 12.766972679096169
+      }
+    ]
+  },
+  "timestamp": "2026-03-31 15:10:35"
+}
