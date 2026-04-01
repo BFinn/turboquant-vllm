@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-vllm = ["vllm>=0.8,<0.9"]
+vllm = ["vllm>=0.18"]
 validate = ["transformers>=4.40", "accelerate>=0.25", "bitsandbytes>=0.43"]
 solver = ["scipy>=1.10"]
 dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10", "scipy>=1.10"]

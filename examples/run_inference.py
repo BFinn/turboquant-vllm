@@ -113,16 +113,18 @@ def main():
 
     model_name = os.environ.get(
         "TURBOQUANT_MODEL",
-        "Qwen/Qwen3.5-35B-A3B-AWQ",
+        "cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit",
     )
-    cpu_offload_gb = int(os.environ.get("TURBOQUANT_CPU_OFFLOAD_GB", "0"))
-    max_model_len = int(os.environ.get("TURBOQUANT_MAX_MODEL_LEN", "8192"))
+    cpu_offload_gb = int(os.environ.get("TURBOQUANT_CPU_OFFLOAD_GB", "10"))
+    max_model_len = int(os.environ.get("TURBOQUANT_MAX_MODEL_LEN", "131072"))
+    kv_cache_dtype = os.environ.get("TURBOQUANT_KV_DTYPE", "fp8_e5m2")
 
     tq_status = "ENABLED" if TURBOQUANT_ENABLED else "DISABLED"
     print(f"TurboQuant: {tq_status}")
     print(f"Model: {model_name}")
     print(f"CPU offload: {cpu_offload_gb} GB")
     print(f"Max model len: {max_model_len}")
+    print(f"KV cache dtype: {kv_cache_dtype}")
     print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None'}")
     print("=" * 60)
 
@@ -132,11 +134,12 @@ def main():
     llm = LLM(
         model=model_name,
         enforce_eager=True,
-        gpu_memory_utilization=0.90,
+        gpu_memory_utilization=0.95,
         cpu_offload_gb=cpu_offload_gb,
         max_model_len=max_model_len,
         max_num_seqs=2,
         trust_remote_code=True,
+        kv_cache_dtype=kv_cache_dtype,
     )
 
     load_time = time.time() - t0
@@ -146,7 +149,7 @@ def main():
     test_basic_generation(llm)
 
     # Needle tests at increasing context
-    for ctx in [2048, 4096]:
+    for ctx in [2048, 8192, 32768, 65536]:
         if ctx <= max_model_len:
             test_needle_in_haystack(llm, ctx)
 
