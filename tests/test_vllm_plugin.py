@@ -63,7 +63,8 @@ def test_key_compress_cosine(bits):
     vecs = vecs / vecs.norm(dim=-1, keepdim=True)
     comp = TQKeyCompressorGPU(d, bits, seed=5678, device=torch.device("cpu"))
     compressed = comp.compress(vecs)
-    cos_sim = F.cosine_similarity(vecs, compressed["k_mse"].float(), dim=-1).mean().item()
+    k_mse = comp.reconstruct_k_mse(compressed["key_indices"], compressed["key_norms"])
+    cos_sim = F.cosine_similarity(vecs, k_mse.float(), dim=-1).mean().item()
     assert cos_sim > 0.75, f"Key MSE cosine sim {cos_sim:.4f} too low at {bits}-bit"
 
 
@@ -83,7 +84,8 @@ def test_asymmetric_ip_unbiased(bits):
     comp = TQKeyCompressorGPU(d, bits, seed=9999, device=torch.device("cpu"))
     compressed = comp.compress(keys)
     true_ip = (queries * keys).sum(dim=-1)
-    k_mse = compressed["k_mse"].float()
+    k_mse = comp.reconstruct_k_mse(
+        compressed["key_indices"], compressed["key_norms"]).float()
     signs = compressed["qjl_signs"].float()
     r_norm = compressed["r_norm"].float()
     term1 = (queries * k_mse).sum(dim=-1)

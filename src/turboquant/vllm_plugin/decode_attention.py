@@ -73,9 +73,14 @@ def turboquant_decode_attention(
         k_mse_all, signs_all, r_norm_all, values_all = [], [], [], []
         S_all, corr_scales = [], []
         for kv_h in range(num_kv_heads):
-            k_mse, signs, r_norm = shadow_cache.gather_compressed_keys(
-                layer_idx, req_block_indices, kv_h)
-            k_mse_all.append(k_mse[:seq_len].to(dtype))
+            key_indices, key_norms, signs, r_norm = (
+                shadow_cache.gather_compressed_keys(
+                    layer_idx, req_block_indices, kv_h))
+            # Reconstruct k_mse on-the-fly from compact indices
+            compressor = shadow_cache.key_compressors[layer_idx][kv_h]
+            k_mse = compressor.reconstruct_k_mse(
+                key_indices[:seq_len], key_norms[:seq_len], dtype)
+            k_mse_all.append(k_mse)
             signs_all.append(signs[:seq_len].to(dtype))
             r_norm_all.append(r_norm[:seq_len].to(dtype))
 
@@ -83,8 +88,8 @@ def turboquant_decode_attention(
                 layer_idx, req_block_indices, kv_h)
             values_all.append(values[:seq_len].to(dtype))
 
-            S_all.append(shadow_cache.key_compressors[layer_idx][kv_h].S.to(dtype))
-            corr_scales.append(shadow_cache.key_compressors[layer_idx][kv_h].correction_scale)
+            S_all.append(compressor.S.to(dtype))
+            corr_scales.append(compressor.correction_scale)
 
         # Stack: (num_kv_heads, L, D)
         k_mse_batch = torch.stack(k_mse_all)

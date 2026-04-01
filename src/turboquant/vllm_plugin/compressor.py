@@ -61,9 +61,10 @@ class TQKeyCompressorGPU:
             keys: (N, head_dim) fp16/bf16 on GPU
 
         Returns dict:
-            k_mse:      (N, head_dim) fp16 - MSE reconstruction in original space
-            qjl_signs:  (N, head_dim) int8 - {-1, +1} sign bits
-            r_norm:     (N,) fp16 - residual L2 norms
+            key_indices: (N, head_dim) uint8 - codebook indices for rotated unit vectors
+            key_norms:   (N,) fp16 - original vector L2 norms
+            qjl_signs:   (N, head_dim) int8 - {-1, +1} sign bits
+            r_norm:      (N,) fp16 - residual L2 norms
         """
         flat = keys.float()
 
@@ -74,23 +75,39 @@ class TQKeyCompressorGPU:
         # Rotate and quantize
         rotated = flat_unit @ self.Pi.T  # (N, D)
         diffs = rotated.unsqueeze(-1) - self.centroids  # (N, D, n_levels)
-        indices = diffs.abs().argmin(dim=-1)  # (N, D)
+        indices = diffs.abs().argmin(dim=-1).to(torch.uint8)  # (N, D)
 
-        # MSE reconstruction in original space
-        reconstructed_rotated = self.centroids[indices]  # (N, D)
+        # MSE reconstruction in original space (for residual computation only)
+        reconstructed_rotated = self.centroids[indices.long()]  # (N, D)
         k_mse = (reconstructed_rotated @ self.Pi) * vec_norms  # (N, D)
 
         # Residual and QJL
         residual = flat - k_mse
         r_norm = torch.norm(residual, dim=-1)  # (N,)
         projected = residual @ self.S.T  # (N, D)
-        signs = (projected >= 0).to(torch.float16) * 2 - 1  # {-1, +1} as fp16
+        signs = (projected >= 0).to(torch.int8) * 2 - 1  # {-1, +1} as int8
 
         return {
-            "k_mse": k_mse.half(),
+            "key_indices": indices,
+            "key_norms": vec_norms.squeeze(-1).half(),
             "qjl_signs": signs,
             "r_norm": r_norm.half(),
         }
+
+    @torch.no_grad()
+    def reconstruct_k_mse(self, indices: torch.Tensor, norms: torch.Tensor,
+                          dtype: torch.dtype = torch.float16) -> torch.Tensor:
+        """Reconstruct k_mse from stored indices and norms.
+
+        Args:
+            indices: (N, head_dim) uint8 codebook indices
+            norms:   (N,) fp16 original vector norms
+
+        Returns: (N, head_dim) in requested dtype
+        """
+        reconstructed_rotated = self.centroids[indices.long()]  # (N, D)
+        k_mse = (reconstructed_rotated @ self.Pi) * norms.float().unsqueeze(-1)
+        return k_mse.to(dtype)
 
 
 class TQValueCompressorGPU:

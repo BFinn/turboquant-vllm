@@ -7,7 +7,7 @@ Patches `forward` to:
 
 DeltaNet layers and prefill are completely untouched.
 
-Compatible with vLLM 0.8.x where FlashAttentionImpl.forward handles both
+Compatible with vLLM 0.18.x where FlashAttentionImpl.forward handles both
 cache writes and attention computation in a single method.
 """
 
@@ -81,6 +81,35 @@ def _compress_blocks(
         )
 
 
+def _compress_tokens_direct(
+    layer_idx: int,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    block_size: int,
+) -> None:
+    """Compress decode tokens directly into shadow cache (no paged cache needed).
+
+    During decode, each token's key/value is compressed directly from the model
+    output, avoiding the FP16 paged cache write entirely.
+    """
+    # key/value shape: (num_tokens, num_kv_heads, head_dim)
+    num_tokens = key.shape[0]
+    for tok_idx in range(num_tokens):
+        slot = slot_mapping[tok_idx].item()
+        if slot < 0:
+            continue  # padding
+        block_idx = slot // block_size
+        slot_offset = slot % block_size
+        _shadow_cache.compress_token_direct(
+            layer_idx,
+            block_idx,
+            slot_offset,
+            key[tok_idx],   # (num_kv_heads, head_dim)
+            value[tok_idx],  # (num_kv_heads, head_dim)
+        )
+
+
 def _patched_forward(
     self,
     layer: torch.nn.Module,
@@ -122,10 +151,11 @@ def _patched_forward(
             _compress_blocks(layer_idx, kv_cache, attn_metadata.slot_mapping)
         return result
 
-    # --- TQ layer, decode: write cache, compress, then asymmetric attention ---
+    # --- TQ layer, decode: write cache + compress directly + asymmetric attention ---
     num_actual_tokens = attn_metadata.num_actual_tokens
+    block_size = kv_cache.shape[2]
 
-    # Step 1: Write KV to paged cache (same as original)
+    # Step 1: Write KV to paged cache (vLLM needs this for preemption/swap)
     key_cache, value_cache = kv_cache.unbind(0)
     torch.ops._C_cache_ops.reshape_and_cache_flash(
         key,
@@ -138,11 +168,12 @@ def _patched_forward(
         layer._v_scale,
     )
 
-    # Step 2: Compress the updated blocks
-    _compress_blocks(layer_idx, kv_cache, attn_metadata.slot_mapping)
+    # Step 2: Compress directly from raw key/value (avoids re-reading paged cache)
+    _compress_tokens_direct(
+        layer_idx, key, value, attn_metadata.slot_mapping, block_size,
+    )
 
     # Step 3: Asymmetric attention from shadow cache
-    block_size = kv_cache.shape[2]
     return turboquant_decode_attention(
         query=query,
         shadow_cache=_shadow_cache,

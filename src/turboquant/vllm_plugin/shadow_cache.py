@@ -24,8 +24,9 @@ class CompressedBlock:
 
     num_valid: int
     # Per-head lists (length = num_kv_heads)
-    key_mse: list[torch.Tensor]  # [(num_valid, head_dim) fp16]
-    key_qjl_signs: list[torch.Tensor]  # [(num_valid, head_dim) fp16]
+    key_indices: list[torch.Tensor]  # [(num_valid, head_dim) uint8]
+    key_norms: list[torch.Tensor]  # [(num_valid,) fp16]
+    key_qjl_signs: list[torch.Tensor]  # [(num_valid, head_dim) int8]
     key_r_norm: list[torch.Tensor]  # [(num_valid,) fp16]
     val_indices: list[torch.Tensor]  # [(num_valid, head_dim) uint8]
     val_norms: list[torch.Tensor]  # [(num_valid,) fp16]
@@ -116,7 +117,7 @@ class ShadowKVCache:
         if num_valid <= old_valid:
             return  # nothing new to compress
 
-        k_mse_list, k_signs_list, k_rnorm_list = [], [], []
+        k_idx_list, k_norms_list, k_signs_list, k_rnorm_list = [], [], [], []
         v_idx_list, v_norms_list = [], []
 
         for h in range(self.config.num_kv_heads):
@@ -127,13 +128,15 @@ class ShadowKVCache:
             v_compressed = self.val_compressors[layer_idx][h].compress(vals_h)
 
             if existing:
-                k_mse_list.append(torch.cat([existing.key_mse[h], k_compressed["k_mse"]], dim=0))
+                k_idx_list.append(torch.cat([existing.key_indices[h], k_compressed["key_indices"]], dim=0))
+                k_norms_list.append(torch.cat([existing.key_norms[h], k_compressed["key_norms"]], dim=0))
                 k_signs_list.append(torch.cat([existing.key_qjl_signs[h], k_compressed["qjl_signs"]], dim=0))
                 k_rnorm_list.append(torch.cat([existing.key_r_norm[h], k_compressed["r_norm"]], dim=0))
                 v_idx_list.append(torch.cat([existing.val_indices[h], v_compressed["indices"]], dim=0))
                 v_norms_list.append(torch.cat([existing.val_norms[h], v_compressed["norms"]], dim=0))
             else:
-                k_mse_list.append(k_compressed["k_mse"])
+                k_idx_list.append(k_compressed["key_indices"])
+                k_norms_list.append(k_compressed["key_norms"])
                 k_signs_list.append(k_compressed["qjl_signs"])
                 k_rnorm_list.append(k_compressed["r_norm"])
                 v_idx_list.append(v_compressed["indices"])
@@ -141,7 +144,8 @@ class ShadowKVCache:
 
         self.blocks[(layer_idx, block_idx)] = CompressedBlock(
             num_valid=num_valid,
-            key_mse=k_mse_list,
+            key_indices=k_idx_list,
+            key_norms=k_norms_list,
             key_qjl_signs=k_signs_list,
             key_r_norm=k_rnorm_list,
             val_indices=v_idx_list,
@@ -153,26 +157,29 @@ class ShadowKVCache:
         layer_idx: int,
         block_indices: list[int],
         kv_head: int,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Gather compressed key data across blocks for one KV head.
 
         Returns:
-            k_mse:      (total_tokens, head_dim) fp16
-            qjl_signs:  (total_tokens, head_dim) int8
-            r_norm:     (total_tokens,) fp16
+            key_indices: (total_tokens, head_dim) uint8
+            key_norms:   (total_tokens,) fp16
+            qjl_signs:   (total_tokens, head_dim) int8
+            r_norm:      (total_tokens,) fp16
         """
         self._ensure_compressors()
-        k_mse_parts, signs_parts, rnorm_parts = [], [], []
+        idx_parts, norm_parts, signs_parts, rnorm_parts = [], [], [], []
         for blk_idx in block_indices:
             cb = self.blocks.get((layer_idx, blk_idx))
             if cb is None:
                 continue
-            k_mse_parts.append(cb.key_mse[kv_head])
+            idx_parts.append(cb.key_indices[kv_head])
+            norm_parts.append(cb.key_norms[kv_head])
             signs_parts.append(cb.key_qjl_signs[kv_head])
             rnorm_parts.append(cb.key_r_norm[kv_head])
 
         return (
-            torch.cat(k_mse_parts, dim=0),
+            torch.cat(idx_parts, dim=0),
+            torch.cat(norm_parts, dim=0),
             torch.cat(signs_parts, dim=0),
             torch.cat(rnorm_parts, dim=0),
         )
@@ -202,6 +209,76 @@ class ShadowKVCache:
         all_norms = torch.cat(norm_parts, dim=0)
         return self.val_compressors[layer_idx][kv_head].decompress(
             {"indices": all_indices, "norms": all_norms}
+        )
+
+    def compress_token_direct(
+        self,
+        layer_idx: int,
+        block_idx: int,
+        slot_offset: int,
+        key: torch.Tensor,
+        value: torch.Tensor,
+    ) -> None:
+        """Compress a single decode token directly (no paged cache needed).
+
+        Args:
+            layer_idx: model layer index
+            block_idx: physical block index
+            slot_offset: token position within the block (0..block_size-1)
+            key:   (num_kv_heads, head_dim) single token key
+            value: (num_kv_heads, head_dim) single token value
+        """
+        self._ensure_compressors()
+
+        existing = self.blocks.get((layer_idx, block_idx))
+        old_valid = existing.num_valid if existing else 0
+        num_valid = max(slot_offset + 1, old_valid)
+
+        # Token already compressed in this block — nothing to append
+        if slot_offset < old_valid:
+            return
+
+        # Safety: slot_offset must be contiguous (no gaps)
+        if slot_offset > old_valid:
+            logger.warning(
+                "compress_token_direct: gap at layer=%d block=%d "
+                "slot_offset=%d old_valid=%d — skipping",
+                layer_idx, block_idx, slot_offset, old_valid,
+            )
+            return
+
+        k_idx_list, k_norms_list, k_signs_list, k_rnorm_list = [], [], [], []
+        v_idx_list, v_norms_list = [], []
+
+        for h in range(self.config.num_kv_heads):
+            k_compressed = self.key_compressors[layer_idx][h].compress(
+                key[h].unsqueeze(0))
+            v_compressed = self.val_compressors[layer_idx][h].compress(
+                value[h].unsqueeze(0))
+
+            if existing:
+                k_idx_list.append(torch.cat([existing.key_indices[h], k_compressed["key_indices"]], dim=0))
+                k_norms_list.append(torch.cat([existing.key_norms[h], k_compressed["key_norms"]], dim=0))
+                k_signs_list.append(torch.cat([existing.key_qjl_signs[h], k_compressed["qjl_signs"]], dim=0))
+                k_rnorm_list.append(torch.cat([existing.key_r_norm[h], k_compressed["r_norm"]], dim=0))
+                v_idx_list.append(torch.cat([existing.val_indices[h], v_compressed["indices"]], dim=0))
+                v_norms_list.append(torch.cat([existing.val_norms[h], v_compressed["norms"]], dim=0))
+            else:
+                k_idx_list.append(k_compressed["key_indices"])
+                k_norms_list.append(k_compressed["key_norms"])
+                k_signs_list.append(k_compressed["qjl_signs"])
+                k_rnorm_list.append(k_compressed["r_norm"])
+                v_idx_list.append(v_compressed["indices"])
+                v_norms_list.append(v_compressed["norms"])
+
+        self.blocks[(layer_idx, block_idx)] = CompressedBlock(
+            num_valid=num_valid,
+            key_indices=k_idx_list,
+            key_norms=k_norms_list,
+            key_qjl_signs=k_signs_list,
+            key_r_norm=k_rnorm_list,
+            val_indices=v_idx_list,
+            val_norms=v_norms_list,
         )
 
     def evict(self, layer_idx: int, block_idx: int) -> None:
