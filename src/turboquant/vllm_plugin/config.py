@@ -17,7 +17,7 @@ class TurboQuantConfig:
     bits: int = 3
     enabled: bool = True
     full_attn_layers: tuple[int, ...] = _DEFAULT_FULL_ATTN_LAYERS
-    head_dim: int = 128
+    head_dim: int = 256
     num_kv_heads: int = 2
     num_q_heads: int = 16
     seed_base: int = 42
@@ -26,7 +26,7 @@ class TurboQuantConfig:
     def from_env(cls) -> TurboQuantConfig:
         enabled = os.environ.get("VLLM_TURBOQUANT_ENABLED", "1") != "0"
         bits = int(os.environ.get("VLLM_TURBOQUANT_BITS", "3"))
-        head_dim = int(os.environ.get("VLLM_TURBOQUANT_HEAD_DIM", "128"))
+        head_dim = int(os.environ.get("VLLM_TURBOQUANT_HEAD_DIM", "256"))
         num_kv_heads = int(os.environ.get("VLLM_TURBOQUANT_NUM_KV_HEADS", "2"))
         num_q_heads = int(os.environ.get("VLLM_TURBOQUANT_NUM_Q_HEADS", "16"))
         seed_base = int(os.environ.get("VLLM_TURBOQUANT_SEED", "42"))
@@ -42,9 +42,9 @@ class TurboQuantConfig:
 
         if "VLLM_TURBOQUANT_HEAD_DIM" not in os.environ:
             logger.warning(
-                "VLLM_TURBOQUANT_HEAD_DIM not set, defaulting to 128. "
+                "VLLM_TURBOQUANT_HEAD_DIM not set, defaulting to 256. "
                 "Set this to your model's attention head dimension "
-                "(e.g. 128 for Llama/Qwen/Mistral, 256 for Qwen3.5-35B)."
+                "(e.g. 128 for Llama/Qwen2.5/Mistral, 256 for Qwen3.5-35B-A3B)."
             )
 
         return cls(

@@ -54,9 +54,9 @@ def solve_lloyd_max(
         centroids: sorted tensor of 2^bits optimal centroids
         boundaries: sorted tensor of 2^bits - 1 boundaries between centroids
     """
-    # Return precomputed codebooks for d=128 (covers most models) if available
-    if d == 128 and not use_exact and bits in PRECOMPUTED:
-        centroids, boundaries = PRECOMPUTED[bits]
+    # Return precomputed codebooks if available (d=128 and d=256 for bits 1-4)
+    if not use_exact and (d, bits) in PRECOMPUTED:
+        centroids, boundaries = PRECOMPUTED[(d, bits)]
         return (
             torch.tensor(centroids, dtype=torch.float32),
             torch.tensor(boundaries, dtype=torch.float32),
