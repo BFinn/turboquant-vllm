@@ -11,7 +11,7 @@ A PyTorch implementation of [TurboQuant](https://arxiv.org/abs/2504.19874) (ICLR
 - **3-7x KV cache compression** with minimal impact on attention accuracy (99.5%+ cosine similarity at 3-bit)
 - **Two-stage quantization**: Lloyd-Max optimal scalar quantization with QJL residual correction for unbiased inner products
 - **vLLM plugin**: drop-in KV cache compression via `vllm.general_plugins` entry point -- prefill uses standard FP16 attention, decode uses TurboQuant asymmetric attention
-- **Validated on real models**: tested against Qwen2.5-3B-Instruct and used in production with Qwen3.5-35B-A3B-AWQ
+- **Validated on real models**: tested against Qwen2.5-3B-Instruct; production use with Qwen3.5-35B-A3B-AWQ at 131K context on RTX 5080 16 GB
 - **No custom CUDA kernels**: pure PyTorch implementation
 
 ## Installation
@@ -49,7 +49,7 @@ import torch
 from turboquant import TurboQuantProd, solve_lloyd_max
 
 # Solve Lloyd-Max codebook for 3-bit quantization
-# dim = head dimension (128 for most models), bits = quantization bit-width
+# dim = head dimension (128 for Llama/Qwen2.5, 256 for Qwen3.5), bits = quantization bit-width
 # Returns a 1D tensor of 2^bits optimal centroids for the post-rotation coordinate distribution
 codebook = solve_lloyd_max(dim=128, bits=3)
 
@@ -69,12 +69,12 @@ scores = tq.inner_product(query, compressed)  # shape: (64,)
 
 ### Tested Models
 
-| Model | head_dim | KV Heads | Status |
-|-------|----------|----------|--------|
-| Qwen3.5-35B-A3B-AWQ | 128 | 4 | Production use (vision + text) |
-| Qwen2.5-3B-Instruct | 128 | 2 | Validated (benchmarks above) |
+| Model | head_dim | KV Heads | Layers (full-attn / total) | Status |
+|-------|----------|----------|---------------------------|--------|
+| Qwen3.5-35B-A3B-AWQ | 256 | 2 | 10 / 40 | Production (131K context on RTX 5080 16 GB) |
+| Qwen2.5-3B-Instruct | 128 | 2 | 36 / 36 | Validated (benchmarks above) |
 
-TurboQuant should work with any model that uses standard multi-head or grouped-query attention. The key parameter is `head_dim` — most modern models (Llama 3, Qwen, Mistral, Gemma) use 128. Set `VLLM_TURBOQUANT_HEAD_DIM` to match your model if it differs.
+TurboQuant works with any model using standard multi-head or grouped-query attention. Set `VLLM_TURBOQUANT_HEAD_DIM` to match your model (128 for Llama/Qwen2.5/Mistral, 256 for Qwen3.5). Codebooks are pre-computed for both d=128 and d=256.
 
 ### Hardware
 
@@ -221,26 +221,64 @@ All configuration is via environment variables:
 |------------------------------|---------|--------------------------------------------|
 | `VLLM_TURBOQUANT_ENABLED`   | `1`     | Set to `0` to disable the plugin           |
 | `VLLM_TURBOQUANT_BITS`      | `3`     | Quantization bit-width (2, 3, or 4)        |
-| `VLLM_TURBOQUANT_HEAD_DIM`  | `128`   | Attention head dimension                   |
+| `VLLM_TURBOQUANT_HEAD_DIM`  | `256`   | Attention head dimension                   |
 | `VLLM_TURBOQUANT_NUM_KV_HEADS` | `2`  | Number of KV heads (for GQA models)        |
 | `VLLM_TURBOQUANT_NUM_Q_HEADS`  | `16` | Number of query heads                      |
 | `VLLM_TURBOQUANT_LAYERS`    | *(auto)* | Comma-separated layer indices to compress |
 | `VLLM_TURBOQUANT_SEED`      | `42`    | Random seed for rotation matrices          |
 
-Examples:
+### Production Setup: Qwen3.5-35B-A3B on RTX 5080 (16 GB)
+
+This is the tested production configuration for running Qwen3.5-35B-A3B with 131K context on a single RTX 5080 16 GB. See [`serve.sh`](serve.sh) for the full script.
 
 ```bash
-# Small model, default settings
-VLLM_TURBOQUANT_BITS=3 vllm serve Qwen/Qwen2.5-3B-Instruct
+# Reduce CUDA memory fragmentation (required for tight VRAM budgets)
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Qwen3.5-35B MoE with AWQ weights (production config)
-VLLM_TURBOQUANT_BITS=3 \
+export VLLM_TURBOQUANT_ENABLED=1
+export VLLM_TURBOQUANT_BITS=3
+export VLLM_TURBOQUANT_HEAD_DIM=256
+export VLLM_TURBOQUANT_NUM_KV_HEADS=2
+export VLLM_TURBOQUANT_NUM_Q_HEADS=16
+
+vllm serve cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit \
+  --port 8082 \
+  --enforce-eager \
+  --gpu-memory-utilization 0.92 \
+  --cpu-offload-gb 20 \
+  --max-model-len 131072 \
+  --max-num-seqs 2 \
+  --trust-remote-code \
+  --served-model-name Qwen3.5-35B-A3B \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes
+```
+
+**Memory budget:**
+
+| Component | GPU | CPU |
+|-----------|-----|-----|
+| Model weights (AWQ 4-bit) | ~2.5 GiB | ~20 GiB offloaded |
+| KV cache (TQ 3-bit compressed) | ~12 GiB | — |
+| Compression headroom | ~0.5 GiB | — |
+| **Total** | **~15 GiB** | **~20 GiB RAM** |
+
+**Key points:**
+- `--gpu-memory-utilization 0.92` (not 0.95) leaves headroom for TurboQuant's compression temporaries. At 0.95, prefill can OOM during the quantizer's broadcast operation.
+- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` reduces CUDA memory fragmentation.
+- `--cpu-offload-gb 20` moves most model weights to CPU RAM, freeing GPU VRAM for KV cache.
+- `--enforce-eager` is required for the hybrid Mamba+Attention architecture.
+- Only 10 of 40 layers use full attention (the rest are GDN/linear) — TurboQuant compresses only those 10 layers.
+
+**vLLM 0.18 patch required:** The hybrid Mamba+Attention architecture with CPU offloading triggers a re-initialization assertion in vLLM 0.18. Change the assert to a warning in `vllm/v1/worker/gpu_model_runner.py`. See [vllm-project/vllm#18298](https://github.com/vllm-project/vllm/pull/18298).
+
+### Other Examples
+
+```bash
+# Small model, default settings (head_dim=128)
 VLLM_TURBOQUANT_HEAD_DIM=128 \
-VLLM_TURBOQUANT_NUM_KV_HEADS=4 \
-VLLM_TURBOQUANT_NUM_Q_HEADS=32 \
-  vllm serve Qwen/Qwen3.5-35B-A3B-AWQ \
-    --max-model-len 32768 \
-    --gpu-memory-utilization 0.95
+VLLM_TURBOQUANT_BITS=3 \
+  vllm serve Qwen/Qwen2.5-3B-Instruct
 ```
 
 ## Project Structure

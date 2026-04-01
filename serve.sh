@@ -13,7 +13,7 @@
 #
 # Memory budget (RTX 5080 16GB):
 #   Model: ~2.5 GiB on GPU (20 GB offloaded to CPU RAM)
-#   KV cache: ~13 GiB → 131K tokens capacity (TQ 3-bit compressed)
+#   KV cache: ~12 GiB → 131K tokens capacity (TQ 3-bit compressed)
 #   max_model_len: 131072
 #
 # Model config (Qwen3.5-35B-A3B = hybrid MoE, 256 experts, 8 active):
@@ -24,6 +24,7 @@
 set -euo pipefail
 PORT="${1:-8082}"
 
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export VLLM_TURBOQUANT_ENABLED=1
 export VLLM_TURBOQUANT_BITS=3
 export VLLM_TURBOQUANT_HEAD_DIM=256
@@ -33,7 +34,7 @@ export VLLM_TURBOQUANT_NUM_Q_HEADS=16
 exec vllm serve cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit \
   --port "$PORT" \
   --enforce-eager \
-  --gpu-memory-utilization 0.95 \
+  --gpu-memory-utilization 0.92 \
   --cpu-offload-gb 20 \
   --max-model-len 131072 \
   --max-num-seqs 2 \
